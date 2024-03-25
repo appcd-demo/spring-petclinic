@@ -59,6 +59,11 @@ dependencies {
   implementation 'software.amazon.awssdk:kms'
   implementation 'software.amazon.awssdk:sso'
   implementation 'software.amazon.awssdk:ssooidc'
+
+  implementation platform('com.azure.spring:spring-cloud-azure-dependencies:5.10.0')
+  implementation 'com.azure.spring:spring-cloud-azure-starter-storage-blob'
+  implementation 'com.azure.spring:spring-cloud-azure-keyvault'
+  implementation 'com.azure:azure-security-keyvault-keys'
 }
 
 tasks.named('test') {

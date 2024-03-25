@@ -1,19 +1,19 @@
 package org.springframework.samples.petclinic.pettypes;
 
+import com.azure.security.keyvault.keys.cryptography.CryptographyClient;
+import com.azure.security.keyvault.keys.cryptography.CryptographyClientBuilder;
+import com.azure.security.keyvault.keys.cryptography.models.EncryptionAlgorithm;
+import com.azure.storage.blob.BlobClient;
+import com.azure.storage.blob.BlobServiceClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.InitializingBean;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.samples.petclinic.owner.PetType;
 import org.springframework.stereotype.Component;
-import software.amazon.awssdk.auth.credentials.AwsCredentialsProvider;
-import software.amazon.awssdk.core.SdkBytes;
-import software.amazon.awssdk.services.kms.KmsClient;
-import software.amazon.awssdk.services.kms.model.DecryptResponse;
-import software.amazon.awssdk.services.s3.S3Client;
 
+import java.nio.charset.StandardCharsets;
 import java.util.List;
-import java.util.Optional;
 
 /**
  * Perform some initializing of the supported pet types on startup by downloading them
@@ -26,48 +26,42 @@ public class InitPetTypes implements InitializingBean {
 
 	private final PetTypesRepository petTypesRepository;
 
-	private final KmsClient kmsClient;
+	private final CryptographyClient cryptoClient;
 
-	private final S3Client s3Client;
+	private final BlobClient blobClient;
 
-	@Value("${app.init.pet-types.key:petclinic-pettypes.txt}")
-	private String petTypesInitObjectKey;
+	@Value("${app.init.pet-types.blob:petclinic-pettypes.txt}")
+	private String petTypesInitBlobName;
 
-	@Value("${app.init.pet-types.kms-encrypted:false}")
-	private Boolean petTypesInitObjectKmsEncrypted;
+	@Value("${app.init.pet-types.keyvault-encrypted:false}")
+	private Boolean petTypesInitKeyVaultEncrypted;
 
-	InitPetTypes(PetTypesRepository petTypesRepository, Optional<AwsCredentialsProvider> awsCredentialsProvider,
-			Optional<S3Client> s3Client) {
+	InitPetTypes(PetTypesRepository petTypesRepository, BlobServiceClient blobServiceClient) {
 		this.petTypesRepository = petTypesRepository;
-		this.s3Client = s3Client.orElse(null);
+		this.blobClient = blobServiceClient
+			.getBlobContainerClient("spring-petclinic-init")
+			.getBlobClient(petTypesInitBlobName);
 
-		AwsCredentialsProvider credentialsProvider = awsCredentialsProvider.orElse(null);
-		this.kmsClient = credentialsProvider != null
-				? KmsClient.builder().credentialsProvider(credentialsProvider).build() : null;
+		this.cryptoClient = new CryptographyClientBuilder().keyIdentifier("spring-petclinic-init").buildClient();
 	}
 
 	@Override
 	public void afterPropertiesSet() throws Exception {
-		if (s3Client == null) {
-			logger.info("No S3Client configured, skipping loading pettypes.");
+		if (blobClient == null) {
+			logger.info("No BlobClient configured, skipping loading pettypes.");
 			return;
 		}
 
-		logger.info("Loading Pet types from \"spring-petclinic-init\" bucket at " + petTypesInitObjectKey);
-		String fileContents = s3Client
-			.getObjectAsBytes(b -> b.bucket("spring-petclinic-init").key(petTypesInitObjectKey))
-			.asUtf8String();
+		logger.info("Loading Pet types from \"spring-petclinic-init\" container at " + petTypesInitBlobName);
+		byte[] fileContents = blobClient.downloadContent().toBytes();
 
-		// if kms encrypted, attempt to decrypt it
-		if (petTypesInitObjectKmsEncrypted) {
-			logger.info("Decrypting pet types using KMS key...");
-			SdkBytes encryptedData = SdkBytes.fromUtf8String(fileContents);
-			DecryptResponse decryptResponse = kmsClient
-				.decrypt(b -> b.ciphertextBlob(encryptedData).keyId("spring-petclinic-init"));
-			fileContents = decryptResponse.plaintext().asUtf8String();
+		// if keyvault encrypted, attempt to decrypt it
+		if (petTypesInitKeyVaultEncrypted) {
+			logger.info("Decrypting pet types using KeyVault key...");
+			fileContents = cryptoClient.decrypt(EncryptionAlgorithm.RSA_OAEP, fileContents).getPlainText();
 		}
 
-		List<PetType> foundTypes = fileContents.lines().map(s -> {
+		List<PetType> foundTypes = new String(fileContents, StandardCharsets.UTF_8).lines().map(s -> {
 			PetType type = new PetType();
 			type.setName(s);
 			return type;
@@ -79,8 +73,8 @@ public class InitPetTypes implements InitializingBean {
 			petTypesRepository.saveAllAndFlush(foundTypes);
 
 			// clean up the file if we've successfully loaded from it
-			logger.info("Deleting Pet types file from S3");
-			s3Client.deleteObject(builder -> builder.bucket("spring-petclinic-init").key(petTypesInitObjectKey));
+			logger.info("Deleting Pet types blob from container");
+			blobClient.delete();
 		}
 	}
 
