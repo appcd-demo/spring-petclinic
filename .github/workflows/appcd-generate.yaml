@@ -1,0 +1,33 @@
+name: APPCD IAC check
+on:
+  push:
+    branches:
+      - main
+      - feature/demo_ci
+  pull_request:
+    branches:
+      - main
+jobs:
+  generate-iac-artifacts:
+    permissions:
+      contents: write
+      pull-requests: write
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Main Branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: Generate IAC for main branch
+        env:
+          APPCD_TOKEN: ${{ secrets.APPCD_TOKEN }}
+          APPCD_URL: ${{ secrets.APPCD_URL }}
+        uses: appcd-dev/generate-action@v0
+        with:
+            outputDir: './.appcd/infra'
+            targetCompute: 'k8s'
+      - name: Upload main artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: iac_artifacts
+          path: .appcd/infra
